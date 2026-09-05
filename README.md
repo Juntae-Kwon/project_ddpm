@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-Project setup and the MNIST data pipeline are complete. The diffusion process,
-network, training, sampling, and resumable checkpoints will be added in separate
-verified milestones. No MNIST training has been run.
+Project setup, the MNIST data pipeline, and forward diffusion are complete. The
+network, training, reverse sampling, and resumable checkpoints will be added in
+separate verified milestones. No MNIST training has been run.
 
 ## Environment
 
@@ -96,14 +96,36 @@ Run the tiny offline data tests (fixtures are created under `.cache/tmp/`):
 python -m unittest discover -s tests -v
 ```
 
+## Forward diffusion
+
+`ddpm/diffusion.py` creates a linear variance schedule and evaluates the DDPM
+forward process at any timestep without simulating all earlier steps:
+
+```text
+x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
+epsilon ~ N(0, I)
+```
+
+Here `alpha_t = 1 - beta_t` and `alpha_bar_t` is the cumulative product of
+`alpha_0` through `alpha_t`. As `alpha_bar_t` decreases, the clean image signal
+shrinks and the Gaussian noise contribution grows.
+
+`make_linear_schedule` keeps the number of steps and beta endpoints explicit.
+The conventional `1e-4` to `2e-2` defaults are useful for understanding and
+testing the formulation; the final timestep count remains a later GPU training
+decision. Timesteps are zero-based, so index 0 is the first small noising step.
+
+`sample_forward` returns both `x_t` and the exact sampled noise. That noise will
+be the target for the denoising network. All schedule arrays and computations
+remain on JAX's selected device and work under `jax.jit`.
+
 ## Remaining milestones
 
-1. Forward diffusion and its noise schedule.
-2. A small timestep-conditioned Flax U-Net predicting noise.
-3. Noise-prediction MSE and optimizer updates.
-4. DDPM reverse sampling.
-5. Training with periodic resumable checkpoints and persisted, flushed logs.
-6. A tiny end-to-end smoke test and documentation for the later GPU workflow.
+1. A small timestep-conditioned Flax U-Net predicting noise.
+2. Noise-prediction MSE and optimizer updates.
+3. DDPM reverse sampling.
+4. Training with periodic resumable checkpoints and persisted, flushed logs.
+5. A tiny end-to-end smoke test and documentation for the later GPU workflow.
 
 Final training settings will be selected after inspecting the actual Slurm GPU,
 memory, CPU, RAM, and wall-time allocation. No full-training job is created or
