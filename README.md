@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-Project setup, data, diffusion, model, training, reverse sampling, resumable
-checkpoints, and persisted logs are complete. The final small CPU smoke test and
-later GPU workflow remain. No full MNIST training has been run.
+All implementation needed before full training is complete and covered by a
+small end-to-end smoke test. GPU-specific verification and final hyperparameter
+selection remain deferred to a later Slurm allocation. No full training has run.
 
 ## Environment
 
@@ -235,10 +235,36 @@ diffusion schedule, learning rate, batch size, or seed. `--max-steps` and output
 frequencies may change between invocations, which allows a verified run to be
 extended without changing the learned state.
 
-## Remaining milestones
+## End-to-end smoke test
 
-1. A tiny end-to-end smoke test and documentation for the later GPU workflow.
+Run the deliberately small current-device check from the project root:
 
-Final training settings will be selected after inspecting the actual Slurm GPU,
-memory, CPU, RAM, and wall-time allocation. No full-training job is created or
-submitted at this stage.
+```bash
+python -u -m scripts.smoke_test
+```
+
+It uses eight MNIST images, a width-8 U-Net, four diffusion steps, batches of two,
+and only three optimizer updates. It stops after step two and invokes the runner
+again to verify checkpoint restoration before step three. The same run verifies
+data loading, model initialization, forward diffusion, finite loss and optimizer
+state, reverse sampling, atomic checkpoints, JSONL logs, tensor shapes, and JAX
+device placement. These settings are only for a low-resource functional check.
+
+Each invocation creates a small unique ignored directory under `runs/smoke_*` so
+it never overwrites earlier evidence. Pass `--run-dir` only when a specific new,
+empty project-local directory is desired.
+
+## Later GPU training
+
+The [GPU workflow](docs/gpu_training.md) describes how a later Slurm allocation
+should inspect its resources, install and verify an appropriate CUDA-enabled JAX
+build, select parameters, run a short GPU smoke test, and resume the same run into
+full training. It deliberately does not provide or submit a Slurm job and does
+not choose final training hyperparameters before the allocated hardware is known.
+
+## Project status
+
+The project is ready for that later resource-aware GPU verification. Final
+training settings will be selected after inspecting the actual Slurm GPU, memory,
+CPU, RAM, and wall-time allocation. No full-training job has been created or
+submitted.
