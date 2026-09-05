@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-Project setup, data, diffusion, denoising network, training objective, and reverse
-sampling are complete. The training loop and resumable checkpoints will be added
-separately. No full MNIST training has been run.
+Project setup, data, diffusion, model, training, reverse sampling, resumable
+checkpoints, and persisted logs are complete. The final small CPU smoke test and
+later GPU workflow remain. No full MNIST training has been run.
 
 ## Environment
 
@@ -189,10 +189,55 @@ Supplying the same random key reproduces the same samples.
 Samples from an untrained network are expected to look like noise. Image quality
 will only become meaningful after the later full training run.
 
+## Resumable training
+
+Run training from the project root with every resource-sensitive setting chosen
+explicitly. The placeholders below are intentionally not recommendations for the
+later full run:
+
+```bash
+python -u -m scripts.train \
+  --run-dir runs/NAME \
+  --batch-size BATCH_SIZE \
+  --base-channels BASE_CHANNELS \
+  --diffusion-steps DIFFUSION_STEPS \
+  --learning-rate LEARNING_RATE \
+  --max-steps MAX_STEPS \
+  --checkpoint-every CHECKPOINT_INTERVAL \
+  --log-every LOG_INTERVAL \
+  --sample-every SAMPLE_INTERVAL \
+  --num-samples NUM_SAMPLES
+```
+
+Use `python -u` so Slurm captures stdout without Python buffering. Each JSON log
+record is also appended to `train.jsonl`, flushed, and synchronized to storage.
+Generated sample batches are stored as NumPy arrays for later visualization.
+
+Each checkpoint contains the model parameters, Adam state, completed optimizer
+step, next random key, epoch, and completed batch count. Files are written to a
+temporary name and atomically renamed. On startup, training scans checkpoints
+from newest to oldest; corrupt, partial, or incompatible files produce a warning
+and are skipped. Shuffling is deterministic per epoch, so restoration continues
+at the next unprocessed batch.
+
+The run directory has this ignored, generated layout:
+
+```text
+runs/NAME/
+  config.json
+  train.jsonl
+  checkpoints/checkpoint_STEP.msgpack
+  samples/samples_STEP.npy
+```
+
+`config.json` protects a resumed optimizer state from changes to model width,
+diffusion schedule, learning rate, batch size, or seed. `--max-steps` and output
+frequencies may change between invocations, which allows a verified run to be
+extended without changing the learned state.
+
 ## Remaining milestones
 
-1. Training with periodic resumable checkpoints and persisted, flushed logs.
-2. A tiny end-to-end smoke test and documentation for the later GPU workflow.
+1. A tiny end-to-end smoke test and documentation for the later GPU workflow.
 
 Final training settings will be selected after inspecting the actual Slurm GPU,
 memory, CPU, RAM, and wall-time allocation. No full-training job is created or
