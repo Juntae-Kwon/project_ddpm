@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-Project setup, data, forward diffusion, denoising network, and training objective
-are complete. Reverse sampling, the training loop, and resumable checkpoints will
-be added separately. No full MNIST training has been run.
+Project setup, data, diffusion, denoising network, training objective, and reverse
+sampling are complete. The training loop and resumable checkpoints will be added
+separately. No full MNIST training has been run.
 
 ## Environment
 
@@ -164,11 +164,35 @@ the caller owns the random key and must provide a fresh key for each real
 training step. Both functions preserve JAX device placement, and `train_step`
 can be compiled with `jax.jit`.
 
+## Reverse sampling
+
+`ddpm/sampling.py` implements the ancestral DDPM reverse process. At timestep
+`t`, the U-Net predicts the noise in `x_t`, and the reverse mean is
+
+```text
+mu_theta = (x_t - beta_t / sqrt(1 - alpha_bar_t) * epsilon_theta)
+           / sqrt(alpha_t)
+```
+
+For every step above zero, the sampler adds Gaussian noise scaled by the true
+forward posterior variance
+
+```text
+beta_tilde_t = beta_t * (1 - alpha_bar_(t-1)) / (1 - alpha_bar_t).
+```
+
+No noise is added after the final `t=0` prediction. `sample` begins with standard
+Gaussian noise and visits all timesteps in reverse using `jax.lax.fori_loop`, so
+the complete sampling path is compiled and remains on JAX's selected device.
+Supplying the same random key reproduces the same samples.
+
+Samples from an untrained network are expected to look like noise. Image quality
+will only become meaningful after the later full training run.
+
 ## Remaining milestones
 
-1. DDPM reverse sampling.
-2. Training with periodic resumable checkpoints and persisted, flushed logs.
-3. A tiny end-to-end smoke test and documentation for the later GPU workflow.
+1. Training with periodic resumable checkpoints and persisted, flushed logs.
+2. A tiny end-to-end smoke test and documentation for the later GPU workflow.
 
 Final training settings will be selected after inspecting the actual Slurm GPU,
 memory, CPU, RAM, and wall-time allocation. No full-training job is created or
