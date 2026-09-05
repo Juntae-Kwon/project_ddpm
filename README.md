@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-Project setup, the MNIST data pipeline, forward diffusion, and denoising network
-are complete. The training objective, reverse sampling, training loop, and
-resumable checkpoints will be added separately. No MNIST training has been run.
+Project setup, data, forward diffusion, denoising network, and training objective
+are complete. Reverse sampling, the training loop, and resumable checkpoints will
+be added separately. No full MNIST training has been run.
 
 ## Environment
 
@@ -144,12 +144,31 @@ be selected after inspecting the GPU allocation. It must be a multiple of eight
 because each normalization layer uses eight groups. The tests use a width of
 eight to keep their CPU work deliberately small.
 
+## Training objective
+
+`ddpm/training.py` implements the simplified DDPM noise-prediction objective:
+
+```text
+L = mean((epsilon - epsilon_theta(x_t, t))^2)
+```
+
+For every batch, it samples an independent timestep for each image, draws
+standard Gaussian noise, constructs `x_t` with the closed-form forward process,
+and asks the U-Net to recover that exact noise. Uniform timestep sampling teaches
+the same network to denoise throughout the diffusion trajectory.
+
+`create_train_state` initializes the model and an Optax Adam optimizer. Its
+learning rate is a required argument so the eventual GPU configuration remains
+an explicit decision. `train_step` computes gradients and applies one update;
+the caller owns the random key and must provide a fresh key for each real
+training step. Both functions preserve JAX device placement, and `train_step`
+can be compiled with `jax.jit`.
+
 ## Remaining milestones
 
-1. Noise-prediction MSE and optimizer updates.
-2. DDPM reverse sampling.
-3. Training with periodic resumable checkpoints and persisted, flushed logs.
-4. A tiny end-to-end smoke test and documentation for the later GPU workflow.
+1. DDPM reverse sampling.
+2. Training with periodic resumable checkpoints and persisted, flushed logs.
+3. A tiny end-to-end smoke test and documentation for the later GPU workflow.
 
 Final training settings will be selected after inspecting the actual Slurm GPU,
 memory, CPU, RAM, and wall-time allocation. No full-training job is created or
