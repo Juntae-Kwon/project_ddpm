@@ -1,0 +1,30 @@
+AGENTS.md
+.agents/
+.codex/
+
+# Environments and Python caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Local data and generated artifacts
+data/
+datasets/
+checkpoints/
+outputs/
+runs/
+samples/
+logs/
+.cache/
+*.log
+slurm-*.out
+slurm-*.err
+
+# Editor files
+.vscode/
+.idea/
