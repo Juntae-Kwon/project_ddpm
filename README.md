@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-Project setup, the MNIST data pipeline, and forward diffusion are complete. The
-network, training, reverse sampling, and resumable checkpoints will be added in
-separate verified milestones. No MNIST training has been run.
+Project setup, the MNIST data pipeline, forward diffusion, and denoising network
+are complete. The training objective, reverse sampling, training loop, and
+resumable checkpoints will be added separately. No MNIST training has been run.
 
 ## Environment
 
@@ -119,13 +119,37 @@ decision. Timesteps are zero-based, so index 0 is the first small noising step.
 be the target for the denoising network. All schedule arrays and computations
 remain on JAX's selected device and work under `jax.jit`.
 
+## Denoising network
+
+`ddpm/model.py` defines a small Flax U-Net that accepts a noisy image `x_t` and
+its timestep `t`, then predicts the Gaussian noise in the image. Fixed sine and
+cosine features encode each timestep; a small MLP transforms that encoding and
+adds it to every residual block. This lets one network change its prediction
+according to the current noise level.
+
+The image path is deliberately compact:
+
+```text
+28x28 -> 14x14 -> 7x7 -> 14x14 -> 28x28
+```
+
+Residual blocks provide the convolutional processing. Skip connections copy
+fine spatial information from each downsampling level to the matching upsampling
+level. Group normalization has no running statistics, so training and sampling
+use the same model state. The final convolution returns one predicted-noise value
+for each input pixel.
+
+`base_channels` controls model width and defaults to 32, but the final value will
+be selected after inspecting the GPU allocation. It must be a multiple of eight
+because each normalization layer uses eight groups. The tests use a width of
+eight to keep their CPU work deliberately small.
+
 ## Remaining milestones
 
-1. A small timestep-conditioned Flax U-Net predicting noise.
-2. Noise-prediction MSE and optimizer updates.
-3. DDPM reverse sampling.
-4. Training with periodic resumable checkpoints and persisted, flushed logs.
-5. A tiny end-to-end smoke test and documentation for the later GPU workflow.
+1. Noise-prediction MSE and optimizer updates.
+2. DDPM reverse sampling.
+3. Training with periodic resumable checkpoints and persisted, flushed logs.
+4. A tiny end-to-end smoke test and documentation for the later GPU workflow.
 
 Final training settings will be selected after inspecting the actual Slurm GPU,
 memory, CPU, RAM, and wall-time allocation. No full-training job is created or
