@@ -1,4 +1,4 @@
-"""A small timestep-conditioned U-Net that predicts DDPM noise."""
+"""A small timestep- and optionally label-conditioned U-Net."""
 
 from flax import linen as nn
 import jax
@@ -46,7 +46,7 @@ class UNet(nn.Module):
     base_channels: int = 32
 
     @nn.compact
-    def __call__(self, noisy_images, timesteps):
+    def __call__(self, noisy_images, timesteps, covariates=None):
         if self.base_channels < 8 or self.base_channels % 8:
             raise ValueError("base_channels must be a positive multiple of 8")
 
@@ -56,6 +56,16 @@ class UNet(nn.Module):
         time_embedding = nn.Dense(4 * self.base_channels)(time_embedding)
         time_embedding = nn.silu(time_embedding)
         time_embedding = nn.Dense(4 * self.base_channels)(time_embedding)
+        if covariates is not None:
+            if (
+                covariates.ndim != 2
+                or covariates.shape != (noisy_images.shape[0], 10)
+            ):
+                raise ValueError("covariates must have shape (batch_size, 10)")
+            covariate_embedding = nn.Dense(
+                4 * self.base_channels, name="covariate_projection"
+            )(covariates)
+            time_embedding = time_embedding + covariate_embedding
 
         x = nn.Conv(self.base_channels, kernel_size=(3, 3), padding="SAME")(
             noisy_images

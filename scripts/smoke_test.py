@@ -38,7 +38,8 @@ def main():
     if run_dir.exists() and any(run_dir.iterdir()):
         raise ValueError(f"smoke-test directory is not empty: {run_dir}")
 
-    images = load_mnist()[:8]
+    images, _ = load_mnist()
+    images = images[:8]
     assert images.shape == (8, 28, 28, 1)
     assert images.dtype == np.uint8
 

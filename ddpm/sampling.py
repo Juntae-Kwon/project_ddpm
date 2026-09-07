@@ -16,12 +16,19 @@ def reverse_mean(schedule, noisy_images, predicted_noise, timestep):
     ) / jnp.sqrt(alpha)
 
 
-def p_sample_step(apply_fn, params, schedule, noisy_images, timestep, key):
+def p_sample_step(
+    apply_fn, params, schedule, noisy_images, timestep, key, covariates=None
+):
     """Draw one reverse-process step, omitting random noise when t is zero."""
     timesteps = jnp.full(
         (noisy_images.shape[0],), timestep, dtype=jnp.int32
     )
-    predicted_noise = apply_fn({"params": params}, noisy_images, timesteps)
+    if covariates is None:
+        predicted_noise = apply_fn({"params": params}, noisy_images, timesteps)
+    else:
+        predicted_noise = apply_fn(
+            {"params": params}, noisy_images, timesteps, covariates
+        )
     mean = reverse_mean(schedule, noisy_images, predicted_noise, timestep)
 
     alpha_bar = schedule.alpha_bars[timestep]
@@ -40,8 +47,18 @@ def p_sample_step(apply_fn, params, schedule, noisy_images, timestep, key):
 
 
 @partial(jax.jit, static_argnames=("apply_fn", "num_samples", "image_shape"))
-def sample(apply_fn, params, schedule, key, num_samples, image_shape=(28, 28, 1)):
+def sample(
+    apply_fn,
+    params,
+    schedule,
+    key,
+    num_samples,
+    image_shape=(28, 28, 1),
+    covariates=None,
+):
     """Start from Gaussian noise and run every reverse diffusion step."""
+    if covariates is not None and covariates.shape != (num_samples, 10):
+        raise ValueError("covariates must have shape (num_samples, 10)")
     initial_key, loop_key = jax.random.split(key)
     images = jax.random.normal(
         initial_key, (num_samples,) + image_shape, dtype=jnp.float32
@@ -59,6 +76,7 @@ def sample(apply_fn, params, schedule, key, num_samples, image_shape=(28, 28, 1)
             current_images,
             timestep,
             step_key,
+            covariates,
         )
         return current_images, current_key
 

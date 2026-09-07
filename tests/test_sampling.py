@@ -105,6 +105,35 @@ class SamplingTests(unittest.TestCase):
         self.assertTrue(np.isfinite(np.asarray(generated)).all())
         np.testing.assert_array_equal(generated, repeated)
 
+    def test_conditional_sampler_is_reproducible(self):
+        schedule = make_linear_schedule(4)
+        model = UNet(base_channels=8)
+        images = jnp.zeros((2, 28, 28, 1), dtype=jnp.float32)
+        timesteps = jnp.zeros((2,), dtype=jnp.int32)
+        covariates = jax.nn.one_hot(jnp.array([3, 7]), 10)
+        params = model.init(
+            jax.random.key(0), images, timesteps, covariates
+        )["params"]
+        generated = sample(
+            model.apply,
+            params,
+            schedule,
+            jax.random.key(1),
+            num_samples=2,
+            covariates=covariates,
+        )
+        repeated = sample(
+            model.apply,
+            params,
+            schedule,
+            jax.random.key(1),
+            num_samples=2,
+            covariates=covariates,
+        )
+        self.assertEqual(generated.shape, images.shape)
+        self.assertTrue(np.isfinite(np.asarray(generated)).all())
+        np.testing.assert_array_equal(generated, repeated)
+
 
 if __name__ == "__main__":
     unittest.main()

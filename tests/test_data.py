@@ -20,16 +20,17 @@ class DataTests(unittest.TestCase):
         temporary_root.mkdir(parents=True, exist_ok=True)
         self.directory = tempfile.TemporaryDirectory(dir=temporary_root)
         self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / "images.gz"
+        self.image_path = Path(self.directory.name) / "images.gz"
+        self.label_path = Path(self.directory.name) / "labels.gz"
 
     def write_images(self, header, pixels):
-        with gzip.open(self.path, "wb") as target:
+        with gzip.open(self.image_path, "wb") as target:
             target.write(header + pixels)
 
     def test_read_images(self):
         pixels = np.arange(2 * 28 * 28).astype(np.uint8)
         self.write_images(struct.pack(">IIII", 2051, 2, 28, 28), pixels.tobytes())
-        images = data._read_images(self.path)
+        images = data._read_images(self.image_path)
         self.assertEqual(images.shape, (2, 28, 28, 1))
         self.assertEqual(images.dtype, np.uint8)
         np.testing.assert_array_equal(images.ravel(), pixels)
@@ -45,17 +46,40 @@ class DataTests(unittest.TestCase):
             with self.subTest(header=header, length=len(pixels)):
                 self.write_images(header, pixels)
                 with self.assertRaises(ValueError):
-                    data._read_images(self.path)
+                    data._read_images(self.image_path)
+
+    def test_read_labels_and_one_hot(self):
+        labels = np.array([0, 4, 9], dtype=np.uint8)
+        with gzip.open(self.label_path, "wb") as target:
+            target.write(struct.pack(">II", 2049, 3) + labels.tobytes())
+        actual = data._read_labels(self.label_path)
+        np.testing.assert_array_equal(actual, labels)
+        covariates = data.one_hot(actual)
+        self.assertEqual(covariates.shape, (3, 10))
+        self.assertEqual(covariates.dtype, np.float32)
+        np.testing.assert_array_equal(covariates.sum(axis=1), 1.0)
+        np.testing.assert_array_equal(covariates.argmax(axis=1), labels)
+
+        for invalid in (np.array([-1]), np.array([10]), np.zeros((1, 1))):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                data.one_hot(invalid)
 
     def test_download_and_cache(self):
-        payload = gzip.compress(struct.pack(">IIII", 2051, 1, 28, 28) + bytes(784))
+        image_payload = gzip.compress(
+            struct.pack(">IIII", 2051, 1, 28, 28) + bytes(784)
+        )
+        label_payload = gzip.compress(struct.pack(">II", 2049, 1) + b"\x07")
         with patch.object(data, "DATA_DIR", Path(self.directory.name)), patch.object(
-            data, "urlopen", return_value=io.BytesIO(payload)
+            data,
+            "urlopen",
+            side_effect=[io.BytesIO(image_payload), io.BytesIO(label_payload)],
         ) as download:
-            first = data.load_mnist()
-            second = data.load_mnist()
-            download.assert_called_once()
-        np.testing.assert_array_equal(first, second)
+            first_images, first_labels = data.load_mnist()
+            second_images, second_labels = data.load_mnist()
+            self.assertEqual(download.call_count, 2)
+        np.testing.assert_array_equal(first_images, second_images)
+        np.testing.assert_array_equal(first_labels, second_labels)
+        np.testing.assert_array_equal(first_labels, [7])
         self.assertFalse(list(Path(self.directory.name).glob("*.part")))
 
     def test_invalid_download_is_not_cached(self):
@@ -83,6 +107,23 @@ class DataTests(unittest.TestCase):
         self.assertEqual(actual.min(), -1.0)
         self.assertEqual(actual.max(), 1.0)
         np.testing.assert_array_equal(images[:, 0, 0, 0], values)
+
+    def test_conditional_batches_keep_images_and_labels_aligned(self):
+        labels = np.array([0, 2, 4, 6, 8], dtype=np.uint8)
+        images = np.broadcast_to(
+            labels[:, None, None, None], (5, 28, 28, 1)
+        ).copy()
+        result = list(data.conditional_batches(images, labels, 2, seed=3))
+        self.assertEqual([images.shape[0] for images, _ in result], [2, 2, 1])
+        for image_batch, covariate_batch in result:
+            self.assertEqual(covariate_batch.shape, (image_batch.shape[0], 10))
+            self.assertEqual(image_batch.devices(), covariate_batch.devices())
+            recovered_pixels = np.rint((np.asarray(image_batch) + 1.0) * 127.5)
+            recovered_labels = np.asarray(covariate_batch).argmax(axis=1)
+            np.testing.assert_array_equal(recovered_pixels[:, 0, 0, 0], recovered_labels)
+
+        with self.assertRaises(ValueError):
+            list(data.conditional_batches(images, labels[:-1], 2, seed=0))
 
     def test_invalid_batch_size(self):
         for size in (0, -1):

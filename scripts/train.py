@@ -26,6 +26,11 @@ def parse_args():
     parser.add_argument("--beta-start", type=float, default=1e-4)
     parser.add_argument("--beta-end", type=float, default=2e-2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--conditional",
+        action="store_true",
+        help="condition the denoiser on MNIST digit labels",
+    )
     return parser.parse_args()
 
 
@@ -60,9 +65,11 @@ def main():
         "beta_end": args.beta_end,
         "seed": args.seed,
     }
+    if args.conditional:
+        fixed_config["conditional"] = True
     ensure_run_config(args.run_dir / "config.json", fixed_config)
 
-    images = load_mnist()
+    images, labels = load_mnist()
     model = UNet(base_channels=args.base_channels)
     schedule = make_linear_schedule(
         args.diffusion_steps,
@@ -82,6 +89,7 @@ def main():
         sample_every=args.sample_every,
         num_samples=args.num_samples,
         seed=args.seed,
+        labels=labels if args.conditional else None,
     )
 
 

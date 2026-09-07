@@ -63,6 +63,24 @@ class ModelTests(unittest.TestCase):
                     jax.random.key(0), images, timesteps
                 )
 
+    def test_covariate_conditioning_changes_prediction(self):
+        model = UNet(base_channels=8)
+        images = jnp.ones((2, 28, 28, 1), dtype=jnp.float32)
+        timesteps = jnp.zeros((2,), dtype=jnp.int32)
+        covariates = jax.nn.one_hot(jnp.array([0, 1]), 10)
+        variables = model.init(
+            jax.random.key(0), images, timesteps, covariates
+        )
+        predictions = model.apply(variables, images, timesteps, covariates)
+        self.assertEqual(predictions.shape, images.shape)
+        self.assertFalse(np.allclose(predictions[0], predictions[1]))
+        self.assertIn("covariate_projection", variables["params"])
+
+        with self.assertRaises(ValueError):
+            model.init(
+                jax.random.key(0), images, timesteps, jnp.zeros((2, 9))
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

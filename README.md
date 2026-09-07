@@ -6,9 +6,9 @@ and Optax provides optimization. NumPy will handle host-side data preparation.
 
 ## Current milestone
 
-All implementation needed before full training is complete and covered by a
-small end-to-end smoke test. GPU-specific verification and final hyperparameter
-selection remain deferred to a later Slurm allocation. No full training has run.
+The unconditional model has completed a 40,000-step L4 training run. Label
+conditioning is implemented and covered by a small end-to-end smoke test; its
+full-run Slurm script is prepared but has not been submitted.
 
 ## Environment
 
@@ -28,6 +28,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
+
+The requirements include JAX's pip-managed CUDA 12 libraries, but installation
+alone does not prove GPU access. The batch job still requires
+`scripts.check_gpu` to pass on its allocated device.
 
 For subsequent sessions, use:
 
@@ -57,38 +61,38 @@ Flax dense layer, runs a JIT-compiled loss and gradient computation, and applies
 one Optax update. It checks shapes, finite values, and device placement. This is
 an environment check; the later DDPM smoke test will exercise the full pipeline.
 
-The initial installation uses ordinary JAX packages without CUDA extras. CPU
-execution in the tunnel is expected. The code does not force a CPU backend;
-JAX selects the available default device. A later GPU Slurm job must install or
-verify appropriate CUDA-enabled JAX support and explicitly confirm GPU use before
-training. Merely allocating a GPU is not sufficient for this initial installation.
+CPU execution in the tunnel is expected even after installing the CUDA extra.
+The code does not force a CPU backend; JAX selects the available default device.
+The Slurm job explicitly confirms CUDA GPU execution before training. Merely
+allocating a GPU is not sufficient verification.
 
 ## MNIST data pipeline
 
-`ddpm/data.py` downloads the training images from the Google-hosted MNIST mirror
-into this project's `data/` directory and reuses the local file on later calls.
-It reads the gzip-compressed IDX format directly using Python and NumPy. Labels
-are unnecessary for unconditional generation and are not downloaded.
+`ddpm/data.py` downloads the training images and labels from the Google-hosted
+MNIST mirror into this project's `data/` directory and reuses the local files on
+later calls. It reads the gzip-compressed IDX format directly using Python and
+NumPy.
 
 From the project root with the environment activated:
 
 ```python
-from ddpm.data import load_mnist, batches
+from ddpm.data import conditional_batches, load_mnist
 
-images = load_mnist()  # Host uint8 array: (60000, 28, 28, 1), about 47 MB.
-batch = next(batches(images, batch_size=8, seed=0))
-print(batch.shape, batch.dtype, batch.devices())
+images, labels = load_mnist()
+image_batch, covariates = next(
+    conditional_batches(images, labels, batch_size=8, seed=0)
+)
+print(image_batch.shape, covariates.shape)  # (8, 28, 28, 1), (8, 10)
 ```
 
-Each batch is converted to `float32` and normalized by `pixel / 127.5 - 1`,
-mapping black to -1 and white to 1. These are the clean images, called `x_0` in
-DDPM. The batch is placed on JAX's default device while the dataset stays in host
-memory. The batch size above is only a small data check, not a training setting.
+Each image batch is converted to `float32` and normalized by
+`pixel / 127.5 - 1`, mapping black to -1 and white to 1. Each digit label becomes
+a ten-dimensional `float32` one-hot covariate. Both batches are placed on JAX's
+default device while the dataset stays in host memory.
 
-`batches` yields one shuffled epoch. The same seed reproduces the same order;
-use a new seed for each epoch. Every image appears once, including a final
-partial batch when needed. Its different shape may trigger a separate JIT
-compilation in later training code.
+`conditional_batches` applies the same permutation to images and labels, so they
+remain aligned during each shuffled epoch. `batches` remains available for the
+unconditional path.
 
 Run the tiny offline data tests (fixtures are created under `.cache/tmp/`):
 
@@ -102,7 +106,7 @@ python -m unittest discover -s tests -v
 forward process at any timestep without simulating all earlier steps:
 
 ```text
-x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * epsilon
+y_t = sqrt(alpha_bar_t) * y_0 + sqrt(1 - alpha_bar_t) * epsilon
 epsilon ~ N(0, I)
 ```
 
@@ -121,11 +125,11 @@ remain on JAX's selected device and work under `jax.jit`.
 
 ## Denoising network
 
-`ddpm/model.py` defines a small Flax U-Net that accepts a noisy image `x_t` and
-its timestep `t`, then predicts the Gaussian noise in the image. Fixed sine and
-cosine features encode each timestep; a small MLP transforms that encoding and
-adds it to every residual block. This lets one network change its prediction
-according to the current noise level.
+`ddpm/model.py` defines a small Flax U-Net that accepts a noisy image `y_t`, its
+timestep `t`, and an optional one-hot covariate `x`. Fixed sine and cosine
+features encode the timestep. For conditional calls, one learned linear layer
+maps `x` to the same dimension and adds it to the timestep embedding before the
+existing residual blocks. The image path itself is unchanged.
 
 The image path is deliberately compact:
 
@@ -139,23 +143,22 @@ level. Group normalization has no running statistics, so training and sampling
 use the same model state. The final convolution returns one predicted-noise value
 for each input pixel.
 
-`base_channels` controls model width and defaults to 32, but the final value will
-be selected after inspecting the GPU allocation. It must be a multiple of eight
-because each normalization layer uses eight groups. The tests use a width of
-eight to keep their CPU work deliberately small.
+`base_channels` controls model width and defaults to 32. Full training uses 64;
+tests use eight to keep their CPU work deliberately small. Unconditional calls
+omit `x`, preserving compatibility with the existing unconditional model.
 
 ## Training objective
 
 `ddpm/training.py` implements the simplified DDPM noise-prediction objective:
 
 ```text
-L = mean((epsilon - epsilon_theta(x_t, t))^2)
+L = mean((epsilon - epsilon_theta(y_t, t, x))^2)
 ```
 
 For every batch, it samples an independent timestep for each image, draws
-standard Gaussian noise, constructs `x_t` with the closed-form forward process,
-and asks the U-Net to recover that exact noise. Uniform timestep sampling teaches
-the same network to denoise throughout the diffusion trajectory.
+standard Gaussian noise, constructs `y_t` with the unchanged closed-form forward
+process, and asks the U-Net to recover that exact noise while receiving `x`.
+Only the image is diffused; the one-hot covariate remains fixed.
 
 `create_train_state` initializes the model and an Optax Adam optimizer. Its
 learning rate is a required argument so the eventual GPU configuration remains
@@ -182,9 +185,9 @@ beta_tilde_t = beta_t * (1 - alpha_bar_(t-1)) / (1 - alpha_bar_t).
 ```
 
 No noise is added after the final `t=0` prediction. `sample` begins with standard
-Gaussian noise and visits all timesteps in reverse using `jax.lax.fori_loop`, so
-the complete sampling path is compiled and remains on JAX's selected device.
-Supplying the same random key reproduces the same samples.
+Gaussian noise and visits all timesteps in reverse using `jax.lax.fori_loop`.
+For conditional generation, the same one-hot covariate is passed at every reverse
+step. Supplying the same random key reproduces the same samples.
 
 Samples from an untrained network are expected to look like noise. Image quality
 will only become meaningful after the later full training run.
@@ -192,11 +195,12 @@ will only become meaningful after the later full training run.
 ## Resumable training
 
 Run training from the project root with every resource-sensitive setting chosen
-explicitly. The placeholders below are intentionally not recommendations for the
-later full run:
+explicitly. Pass `--conditional` for label conditioning; omit it to retain the
+unconditional path. The placeholders below show the conditional form:
 
 ```bash
 python -u -m scripts.train \
+  --conditional \
   --run-dir runs/NAME \
   --batch-size BATCH_SIZE \
   --base-channels BASE_CHANNELS \
@@ -235,36 +239,45 @@ diffusion schedule, learning rate, batch size, or seed. `--max-steps` and output
 frequencies may change between invocations, which allows a verified run to be
 extended without changing the learned state.
 
+Generate a row for each label from the newest conditional checkpoint with:
+
+```bash
+python -u -m scripts.sample_conditional \
+  --run-dir runs/mnist_conditional_l4_b128_c64_t1000 \
+  --output-dir samples/mnist_conditional \
+  --samples-per-label 8 \
+  --seed 1
+```
+
+The output includes raw arrays, individual PNGs, and `grid_10x8.png` with labels
+0 through 9 as rows.
+
 ## End-to-end smoke test
 
 Run the deliberately small current-device check from the project root:
 
 ```bash
 python -u -m scripts.smoke_test
+python -u -m scripts.conditional_smoke_test
 ```
 
-It uses eight MNIST images, a width-8 U-Net, four diffusion steps, batches of two,
-and only three optimizer updates. It stops after step two and invokes the runner
-again to verify checkpoint restoration before step three. The same run verifies
-data loading, model initialization, forward diffusion, finite loss and optimizer
-state, reverse sampling, atomic checkpoints, JSONL logs, tensor shapes, and JAX
-device placement. These settings are only for a low-resource functional check.
+The conditional check selects one real image for every digit, verifies the
+one-hot covariates and label-sensitive model output, and runs only three optimizer
+updates with four diffusion steps. It also restores a checkpoint, performs
+conditional sampling, and writes a ten-row test grid.
 
 Each invocation creates a small unique ignored directory under `runs/smoke_*` so
 it never overwrites earlier evidence. Pass `--run-dir` only when a specific new,
 empty project-local directory is desired.
 
-## Later GPU training
+## GPU training
 
-The [GPU workflow](docs/gpu_training.md) describes how a later Slurm allocation
-should inspect its resources, install and verify an appropriate CUDA-enabled JAX
-build, select parameters, run a short GPU smoke test, and resume the same run into
-full training. It deliberately does not provide or submit a Slurm job and does
-not choose final training hyperparameters before the allocated hardware is known.
+The prepared batch script inspects its Slurm allocation, verifies CUDA-enabled
+JAX, runs a short GPU smoke test, and resumes the same run into full training.
 
 ## Project status
 
-The project is ready for that later resource-aware GPU verification. Final
-training settings will be selected after inspecting the actual Slurm GPU, memory,
-CPU, RAM, and wall-time allocation. No full-training job has been created or
-submitted.
+The prepared conditional script is `slurm/train_conditional_ddpm.sbatch`. It
+requests one L4 GPU, four CPU cores, 16 GB RAM, and one hour. It performs a
+five-step GPU check and resumes the conditional run toward 40,000 total updates.
+It has not been submitted. The local `slurm/` directory is excluded from Git.

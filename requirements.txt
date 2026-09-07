@@ -1,5 +1,5 @@
-# Direct dependencies verified with Python 3.11; CUDA support is deferred.
-jax==0.10.2
+# Direct dependencies verified with Python 3.11.
+jax[cuda12]==0.10.2
 flax==0.12.8
 optax==0.2.8
 numpy==2.4.6

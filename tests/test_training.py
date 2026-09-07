@@ -19,12 +19,15 @@ class TrainingTests(unittest.TestCase):
         _, noise_key = jax.random.split(key)
         exact_noise = jax.random.normal(noise_key, clean_images.shape)
 
-        def exact_predictor(variables, noisy_images, timesteps):
+        covariates = jax.nn.one_hot(jnp.array([2, 8]), 10)
+
+        def exact_predictor(variables, noisy_images, timesteps, labels):
             del variables, noisy_images, timesteps
+            self.assertEqual(labels.shape, (2, 10))
             return exact_noise
 
         loss = noise_prediction_loss(
-            {}, exact_predictor, schedule, clean_images, key
+            {}, exact_predictor, schedule, clean_images, key, covariates
         )
         self.assertEqual(float(loss), 0.0)
 

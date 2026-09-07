@@ -11,17 +11,24 @@ import numpy as np
 import optax
 
 from ddpm.checkpoint import TrainingSnapshot, load_latest_checkpoint, save_checkpoint
-from ddpm.data import batches
+from ddpm.data import batches, conditional_batches, one_hot
 from ddpm.diffusion import sample_forward
 from ddpm.sampling import sample
 
 
-def create_train_state(model, key, example_images, learning_rate):
+def create_train_state(
+    model, key, example_images, learning_rate, covariates=None
+):
     """Initialize model parameters and an Adam optimizer on JAX's device."""
     if learning_rate <= 0:
         raise ValueError("learning_rate must be positive")
     example_timesteps = jnp.zeros((example_images.shape[0],), dtype=jnp.int32)
-    parameters = model.init(key, example_images, example_timesteps)["params"]
+    if covariates is None:
+        parameters = model.init(key, example_images, example_timesteps)["params"]
+    else:
+        parameters = model.init(
+            key, example_images, example_timesteps, covariates
+        )["params"]
     return train_state.TrainState.create(
         apply_fn=model.apply,
         params=parameters,
@@ -29,8 +36,10 @@ def create_train_state(model, key, example_images, learning_rate):
     )
 
 
-def noise_prediction_loss(params, apply_fn, schedule, clean_images, key):
-    """Compute E[||epsilon - epsilon_theta(x_t, t)||^2]."""
+def noise_prediction_loss(
+    params, apply_fn, schedule, clean_images, key, covariates=None
+):
+    """Compute the DDPM noise-prediction MSE, optionally conditioned on labels."""
     timestep_key, noise_key = jax.random.split(key)
     timesteps = jax.random.randint(
         timestep_key,
@@ -42,16 +51,21 @@ def noise_prediction_loss(params, apply_fn, schedule, clean_images, key):
     noisy_images, target_noise = sample_forward(
         schedule, clean_images, timesteps, noise_key
     )
-    predicted_noise = apply_fn({"params": params}, noisy_images, timesteps)
+    if covariates is None:
+        predicted_noise = apply_fn({"params": params}, noisy_images, timesteps)
+    else:
+        predicted_noise = apply_fn(
+            {"params": params}, noisy_images, timesteps, covariates
+        )
     return jnp.mean((predicted_noise - target_noise) ** 2)
 
 
-def train_step(state, schedule, clean_images, key):
+def train_step(state, schedule, clean_images, key, covariates=None):
     """Take one gradient step and return the updated state and pre-update loss."""
 
     def loss_fn(params):
         return noise_prediction_loss(
-            params, state.apply_fn, schedule, clean_images, key
+            params, state.apply_fn, schedule, clean_images, key, covariates
         )
 
     loss, gradients = jax.value_and_grad(loss_fn)(state.params)
@@ -98,6 +112,7 @@ def run_training(
     sample_every,
     num_samples,
     seed=0,
+    labels=None,
 ):
     """Train until max_steps, resuming the newest valid checkpoint if present."""
     positive_settings = {
@@ -113,16 +128,32 @@ def run_training(
             raise ValueError(f"{name} must be positive")
     if len(images) < 1:
         raise ValueError("images must not be empty")
+    if labels is not None and len(images) != len(labels):
+        raise ValueError("images and labels must have the same length")
 
     run_dir = Path(run_dir)
     checkpoint_dir = run_dir / "checkpoints"
     log_path = run_dir / "train.jsonl"
-    example_images = next(batches(images, min(batch_size, len(images)), seed=seed))
+    if labels is None:
+        example_images = next(
+            batches(images, min(batch_size, len(images)), seed=seed)
+        )
+        example_covariates = None
+    else:
+        example_images, example_covariates = next(
+            conditional_batches(
+                images, labels, min(batch_size, len(images)), seed=seed
+            )
+        )
 
     key = jax.random.key(seed)
     key, initialization_key = jax.random.split(key)
     state = create_train_state(
-        model, initialization_key, example_images, learning_rate
+        model,
+        initialization_key,
+        example_images,
+        learning_rate,
+        example_covariates,
     )
     snapshot = TrainingSnapshot(
         state=state,
@@ -147,15 +178,25 @@ def run_training(
     while int(snapshot.state.step) < max_steps:
         epoch = snapshot.epoch
         completed_batches = snapshot.batch_in_epoch
-        for batch_index, clean_images in enumerate(
+        epoch_batches = (
             batches(images, batch_size, seed=seed + epoch)
-        ):
+            if labels is None
+            else conditional_batches(
+                images, labels, batch_size, seed=seed + epoch
+            )
+        )
+        for batch_index, batch in enumerate(epoch_batches):
             if batch_index < completed_batches:
                 continue
 
+            if labels is None:
+                clean_images, covariates = batch, None
+            else:
+                clean_images, covariates = batch
+
             key, step_key = jax.random.split(key)
             state, loss = compiled_train_step(
-                snapshot.state, schedule, clean_images, step_key
+                snapshot.state, schedule, clean_images, step_key, covariates
             )
             snapshot = TrainingSnapshot(
                 state=state,
@@ -180,6 +221,10 @@ def run_training(
                 save_checkpoint(snapshot, checkpoint_dir)
             if step % sample_every == 0:
                 sample_key = jax.random.fold_in(key, step)
+                sample_covariates = None
+                if labels is not None:
+                    sample_labels = np.arange(num_samples) % 10
+                    sample_covariates = jax.device_put(one_hot(sample_labels))
                 generated = sample(
                     state.apply_fn,
                     state.params,
@@ -187,6 +232,7 @@ def run_training(
                     sample_key,
                     num_samples=num_samples,
                     image_shape=tuple(clean_images.shape[1:]),
+                    covariates=sample_covariates,
                 )
                 sample_path = run_dir / "samples" / f"samples_{step:08d}.npy"
                 _save_samples(sample_path, generated)
