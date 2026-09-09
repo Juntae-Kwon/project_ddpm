@@ -281,3 +281,24 @@ The prepared conditional script is `slurm/train_conditional_ddpm.sbatch`. It
 requests one L4 GPU, four CPU cores, 16 GB RAM, and one hour. It performs a
 five-step GPU check and resumes the conditional run toward 40,000 total updates.
 It has not been submitted. The local `slurm/` directory is excluded from Git.
+
+## Classifier-based conditional evaluation
+
+The notebook `notebooks/conditional_ddpm_evaluation.ipynb` trains a small
+Flax CNN on 10,000 generated images and evaluates it on those same images.
+Its accuracy is an in-sample fit diagnostic, not independent generative-quality
+or held-out accuracy. Classifier inputs are pixels; targets are requested digits.
+
+The ignored `slurm/sample_latest.sbatch` now generates 1,000 images per digit
+with `scripts.generate_conditional_dataset`, then runs JupyterLab in the
+foreground on the same L4 allocation. The one-hour allocation remains active
+until Jupyter is stopped or the wall time expires. The server URL and token
+appear in its Slurm error log. Use SSH port forwarding to access the server.
+
+The generator saves `images.npy`, `labels.npy`, and checkpoint metadata under
+`samples/conditional/evaluation_step_STEP/`. It refuses to overwrite an existing
+dataset. The notebook defaults to step 80000; update its DATA_DIR if using a
+different checkpoint. Select the project kernel **DDPM (.venv)** and run cells
+in order. Metrics and confusion-matrix artifacts are saved under
+`runs/conditional_classifier_evaluation/`. Notebook source is tracked; datasets,
+runtime files, and generated evaluation artifacts are ignored.

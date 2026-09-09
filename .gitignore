@@ -19,6 +19,7 @@ checkpoints/
 outputs/
 runs/
 samples/
+reports/
 logs/
 slurm/
 .cache/
@@ -29,3 +30,6 @@ slurm-*.err
 # Editor files
 .vscode/
 .idea/
+
+# Jupyter autosave files
+.ipynb_checkpoints/
