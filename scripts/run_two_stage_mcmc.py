@@ -32,6 +32,18 @@ def atomic_npz(path, **arrays):
     temporary.replace(path)
 
 
+def atomic_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+
+
 def save_chain(directory, state, config):
     path = directory / f"chain_{int(state['sweep']):06d}.npz"
     atomic_npz(path, **state, config_json=np.array(json.dumps(config, sort_keys=True)))
@@ -218,9 +230,24 @@ def main():
                epsilon_history=state['epsilon_history'][:count], gradient_mean=state['gradient_mean'][:count],
                gradient_max=state['gradient_max'][:count], finite=state['finite_history'][:count],
                runtime_seconds=state['runtime'][:count])
-    append_log(log_path, dict(event='complete' if count == args.total_sweeps else 'paused',
-                              sweep=count, retained=int(retained.sum()),
-                              total_sweep_seconds=float(state['runtime'][:count].sum()), parameters_unchanged=True))
+    event = 'complete' if count == args.total_sweeps else 'paused'
+    total_sweep_seconds = float(state['runtime'][:count].sum())
+    append_log(log_path, dict(event=event, sweep=count, retained=int(retained.sum()),
+                              total_sweep_seconds=total_sweep_seconds, parameters_unchanged=True))
+    if event == 'complete':
+        atomic_json(output / 'completed.json', {
+            'sweep': count,
+            'retained': int(retained.sum()),
+            'parameters_unchanged': True,
+            'stage1_checkpoint': str(checkpoint),
+            'stage1_checkpoint_sha256': completed['sha256'],
+            'final_chain_checkpoint': str(
+                checkpoint_dir / f"chain_{count:06d}.npz"
+            ),
+            'posterior_samples': str(output / 'posterior_samples.npz'),
+            'diagnostics': str(output / 'diagnostics.npz'),
+            'total_sweep_seconds': total_sweep_seconds,
+        })
 
 
 if __name__ == '__main__':
