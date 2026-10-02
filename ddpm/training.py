@@ -113,6 +113,7 @@ def run_training(
     num_samples,
     seed=0,
     labels=None,
+    reverse_variance="posterior",
 ):
     """Train until max_steps, resuming the newest valid checkpoint if present."""
     positive_settings = {
@@ -233,6 +234,7 @@ def run_training(
                     num_samples=num_samples,
                     image_shape=tuple(clean_images.shape[1:]),
                     covariates=sample_covariates,
+                    variance=reverse_variance,
                 )
                 sample_path = run_dir / "samples" / f"samples_{step:08d}.npy"
                 _save_samples(sample_path, generated)

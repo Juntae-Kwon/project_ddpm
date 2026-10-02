@@ -17,9 +17,14 @@ def reverse_mean(schedule, noisy_images, predicted_noise, timestep):
 
 
 def p_sample_step(
-    apply_fn, params, schedule, noisy_images, timestep, key, covariates=None
+    apply_fn, params, schedule, noisy_images, timestep, key, covariates=None,
+    variance="posterior",
 ):
-    """Draw one reverse-process step, omitting random noise when t is zero."""
+    """Draw a reverse step; 'beta' adds noise even at the final transition.
+
+    The default 'posterior' convention preserves the original sampler's
+    deterministic final step.
+    """
     timesteps = jnp.full(
         (noisy_images.shape[0],), timestep, dtype=jnp.int32
     )
@@ -30,6 +35,13 @@ def p_sample_step(
             {"params": params}, noisy_images, timesteps, covariates
         )
     mean = reverse_mean(schedule, noisy_images, predicted_noise, timestep)
+
+    if variance == "beta":
+        # The two-stage experiment defines a Gaussian even for Y_0 | Y_1.
+        noise = jax.random.normal(key, noisy_images.shape, dtype=noisy_images.dtype)
+        return mean + jnp.sqrt(schedule.betas[timestep]) * noise
+    if variance != "posterior":
+        raise ValueError("variance must be 'posterior' or 'beta'")
 
     alpha_bar = schedule.alpha_bars[timestep]
     alpha_bar_previous = jnp.where(
@@ -46,7 +58,7 @@ def p_sample_step(
     )
 
 
-@partial(jax.jit, static_argnames=("apply_fn", "num_samples", "image_shape"))
+@partial(jax.jit, static_argnames=("apply_fn", "num_samples", "image_shape", "variance"))
 def sample(
     apply_fn,
     params,
@@ -55,6 +67,7 @@ def sample(
     num_samples,
     image_shape=(28, 28, 1),
     covariates=None,
+    variance="posterior",
 ):
     """Start from Gaussian noise and run every reverse diffusion step."""
     if covariates is not None and covariates.shape != (num_samples, 10):
@@ -77,6 +90,7 @@ def sample(
             timestep,
             step_key,
             covariates,
+            variance,
         )
         return current_images, current_key
 

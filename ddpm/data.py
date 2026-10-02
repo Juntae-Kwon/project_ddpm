@@ -68,6 +68,12 @@ def _download(filename, url, reader):
     return values
 
 
+def load_mnist_images():
+    """Load training pixels only, without opening or downloading labels."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return _download("train-images-idx3-ubyte.gz", MNIST_IMAGE_URL, _read_images)
+
+
 def load_mnist():
     """Download once; return aligned host uint8 training images and labels."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
