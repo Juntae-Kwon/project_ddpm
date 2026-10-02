@@ -33,3 +33,4 @@ slurm-*.err
 
 # Jupyter autosave files
 .ipynb_checkpoints/
+analysis/stage2_analysis_data/
